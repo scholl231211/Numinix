@@ -1,5 +1,19 @@
-const GROQ_PROXY_URL = 'https://backend-n6jop.sevalla.app/api/groq-chat';
+import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "@google/generative-ai";
 import chaptersData from '../data/chapters.json';
+
+let geminiClient: GoogleGenerativeAI | null = null;
+
+function initializeGemini(): GoogleGenerativeAI {
+	const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+	if (!apiKey) {
+		throw new Error('Google Gemini API key is not configured. Please add VITE_GEMINI_API_KEY to your .env file.');
+	}
+	if (!geminiClient) {
+		geminiClient = new GoogleGenerativeAI(apiKey);
+	}
+	return geminiClient;
+}
+
 export interface AIResponse {
 	solution: string;
 	steps: string[];
@@ -9,38 +23,47 @@ export interface AIResponse {
 
 export async function solveMathProblem(question: string): Promise<AIResponse> {
 	try {
-		const messages = [
-			{ role: "system", content: "You are MathMentor, a super-smart, friendly, and fun math assistant inside the Numinix app. You are made just to answer math's related things not other things. use emojis in conversation and make the conversation fun . After solving any mathematical question alway give question like user have asked as challange. Make the conversation airy but well explained. " },
-			{ role: "user", content: question }
-		];
-		const response = await fetch(GROQ_PROXY_URL, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json"
+		const genAI = initializeGemini();
+		const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+
+		const systemPrompt = "You are MathMentor, a super-smart, friendly, and fun math assistant inside the Numinix app. You are made just to answer math's related things not other things. use emojis in conversation and make the conversation fun . After solving any mathematical question alway give question like user have asked as challange. Make the conversation airy but well explained. ";
+
+		const response = await model.generateContent({
+			contents: [
+				{
+					role: "user",
+					parts: [{ text: systemPrompt + "\n\n" + question }]
+				}
+			],
+			generationConfig: {
+				temperature: 0.7,
+				topP: 0.8,
+				topK: 40,
+				maxOutputTokens: 2048,
 			},
-			body: JSON.stringify({
-				model: "llama-3.1-8b-instant",
-				messages
-			})
+			safetySettings: [
+				{
+					category: HarmCategory.HARM_CATEGORY_UNSPECIFIED,
+					threshold: HarmBlockThreshold.BLOCK_NONE,
+				},
+			],
 		});
-		if (!response.ok) {
-			let errorText = await response.text();
-			console.error('Groq API error:', response.status, response.statusText, errorText);
-			throw new Error(`Groq API error: ${response.status} ${response.statusText} - ${errorText}`);
-		}
-		const data = await response.json();
+
+		const content = response.response.text();
 		return {
-			solution: data.choices?.[0]?.message?.content || "",
+			solution: content || "",
 			steps: [],
 			confidence: 1,
 			error: undefined
 		};
 	} catch (error: any) {
+		const errorMessage = error.message || 'Unknown error occurred';
+		console.error('Gemini API error:', errorMessage);
 		return {
 			solution: '',
 			steps: [],
 			confidence: 0,
-			error: error.message
+			error: errorMessage
 		};
 	}
 }
@@ -48,11 +71,14 @@ export async function solveMathProblem(question: string): Promise<AIResponse> {
 // Personalized AI quiz question generator
 export async function generateQuestions(userProfile: any, selectedChapters: string[]): Promise<any[]> {
 	try {
+		const genAI = initializeGemini();
+		const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+
 		const classLevel = userProfile.class_level;
 		const strengths = userProfile.strengths || [];
 		const weaknesses = userProfile.weaknesses || [];
 		const unlockedChapters = userProfile.unlocked_chapters || [];
-		
+
 		// Get chapter names and topics for selectedChapters
 		const selectedChapterObjs = chaptersData
 			.filter((ch: any) => selectedChapters.includes(ch.id));
@@ -62,27 +88,30 @@ export async function generateQuestions(userProfile: any, selectedChapters: stri
 
 		let prompt = `You are a math quiz generator for a class ${classLevel} student. Generate 10 challenging, conceptually deep, and curriculum-appropriate questions for class 9 mathematics ONLY.\n\nIMPORTANT: Only generate questions from these chapters: ${selectedChapterNames.join(', ')}. Do NOT include any questions from chapters that are not in this list.\n\nFor each selected chapter, here are the topics you must use:\n${chapterTopicsList}\n\nDistribute the questions across as many different topics as possible, covering multiple topics from each selected chapter. Do not focus all questions on a single topic.\n\nPersonalize the questions based on the following user profile:\n\nStrengths: ${strengths.length ? strengths.join(', ') : 'None'}\nWeaknesses: ${weaknesses.length ? weaknesses.join(', ') : 'None'}\nUnlocked Chapters: ${unlockedChapters.length ? unlockedChapters.join(', ') : 'None'}\nSelected Chapters: ${selectedChapterNames.join(', ') || 'None'}\n\nRules:\n- All questions must be strictly for class 9th level (no primary or lower-level math).\n- Focus on concepts and topics from ONLY the selected chapters and user weaknesses.\n- At least 3 questions should be hard, 4 medium, and 3 easy, but all must be relevant for class 9th.\n- Each question must have exactly 4 options, with only one correct answer.\n- No repetition of questions or options.\n- No trivial arithmetic (e.g., no simple addition/subtraction like 2+2).\n- Include questions that require reasoning, application, and multi-step thinking.\n- Each question must have a clear, student-friendly explanation.\n- Return ONLY a valid JSON array with this exact structure:\n[\n  { "id": "q1", "question": "What is the value of x if 2x + 5 = 17?", "options": ["5", "6", "7", "8"], "correct_answer": "6", "explanation": "2x + 5 = 17 ⇒ 2x = 12 ⇒ x = 6", "difficulty": "medium", "class_level": 9, "topic": "Linear Equations" }\n]\n\nRequirements:\n- Exactly 10 questions\n- All questions must be for class 9th\n- Mix of easy, medium, and hard (no more than 3 easy)\n- Focus on ONLY the selected chapters and user weaknesses\n- Each question must have exactly 4 options\n- Clear explanations\nMake sure that there are only 4 options and only one of them should correct\nValid JSON format only, no extra text`;
 
-		const messages = [
-			{ role: "system", content: prompt },
-			{ role: "user", content: `Generate 10 personalized math quiz questions for class ${classLevel} from ${chaptersData}.` }
-		];
-		
-		const response = await fetch(GROQ_PROXY_URL, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json"
+		const response = await model.generateContent({
+			contents: [
+				{
+					role: "user",
+					parts: [{ text: prompt + `\n\nGenerate 10 personalized math quiz questions for class ${classLevel}.` }]
+				}
+			],
+			generationConfig: {
+				temperature: 0.7,
+				topP: 0.8,
+				topK: 40,
+				maxOutputTokens: 4096,
 			},
-			body: JSON.stringify({
-				model: "llama-3.1-8b-instant",
-				messages
-			})
+			safetySettings: [
+				{
+					category: HarmCategory.HARM_CATEGORY_UNSPECIFIED,
+					threshold: HarmBlockThreshold.BLOCK_NONE,
+				},
+			],
 		});
-		if (!response.ok) {
-			throw new Error(`Groq API error: ${response.statusText}`);
-		}
-		const data = await response.json();
-		console.log('AI raw Groq response:', data);
-		let rawText = data.choices?.[0]?.message?.content?.trim() || '';
+
+		const data = response.response.text();
+		console.log('AI raw Gemini response:', data);
+		let rawText = data.trim() || '';
 		console.log('AI rawText before cleanup:', rawText);
 		// Clean up the response - remove markdown formatting
 		rawText = rawText.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```$/i, '').trim();

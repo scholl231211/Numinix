@@ -119,17 +119,108 @@ export function ScientificCalculator({ onBack }: ScientificCalculatorProps) {
     }
   }
 
+  function safeEvaluate(expr: string): number {
+    const mathFunctions: Record<string, (x: number) => number> = {
+      sqrt: Math.sqrt,
+      sin: Math.sin,
+      cos: Math.cos,
+      tan: Math.tan,
+      log: Math.log,
+      floor: Math.floor,
+      ceil: Math.ceil,
+      abs: Math.abs,
+    };
+
+    let pos = 0;
+    const tokens = expr.replace(/\s+/g, '');
+
+    const parseExpression = (): number => {
+      let result = parseTerm();
+      while (pos < tokens.length && (tokens[pos] === '+' || tokens[pos] === '-')) {
+        const op = tokens[pos++];
+        const right = parseTerm();
+        result = op === '+' ? result + right : result - right;
+      }
+      return result;
+    };
+
+    const parseTerm = (): number => {
+      let result = parseFactor();
+      while (pos < tokens.length && (tokens[pos] === '*' || tokens[pos] === '/')) {
+        const op = tokens[pos++];
+        const right = parseFactor();
+        result = op === '*' ? result * right : result / right;
+      }
+      return result;
+    };
+
+    const parseFactor = (): number => {
+      let result = parsePower();
+      return result;
+    };
+
+    const parsePower = (): number => {
+      let result = parseUnary();
+      if (pos < tokens.length && tokens[pos] === '^') {
+        pos++;
+        const right = parsePower();
+        result = Math.pow(result, right);
+      }
+      return result;
+    };
+
+    const parseUnary = (): number => {
+      if (tokens[pos] === '-') {
+        pos++;
+        return -parseUnary();
+      } else if (tokens[pos] === '+') {
+        pos++;
+        return parseUnary();
+      }
+      return parsePrimary();
+    };
+
+    const parsePrimary = (): number => {
+      if (tokens[pos] === '(') {
+        pos++;
+        const result = parseExpression();
+        if (tokens[pos] !== ')') throw new Error('Missing closing parenthesis');
+        pos++;
+        return result;
+      }
+
+      for (const func of Object.keys(mathFunctions)) {
+        if (tokens.substring(pos).startsWith(func + '(')) {
+          pos += func.length + 1;
+          const arg = parseExpression();
+          if (tokens[pos] !== ')') throw new Error('Missing closing parenthesis');
+          pos++;
+          return mathFunctions[func](arg);
+        }
+      }
+
+      let numStr = '';
+      while (pos < tokens.length && (tokens[pos].match(/[0-9.]/) || (numStr === '' && tokens[pos] === '-'))) {
+        numStr += tokens[pos++];
+      }
+
+      const num = parseFloat(numStr);
+      if (isNaN(num)) throw new Error('Invalid number');
+      return num;
+    };
+
+    try {
+      const result = parseExpression();
+      if (pos !== tokens.length) throw new Error('Unexpected token');
+      return result;
+    } catch {
+      throw new Error('Invalid expression');
+    }
+  }
+
   function handleCalculate() {
     try {
-      // Replace functions and ^ for eval
-      let expr = expression
-        .replace(/sqrt\(/g, 'Math.sqrt(')
-        .replace(/sin\(/g, 'Math.sin(')
-        .replace(/cos\(/g, 'Math.cos(')
-        .replace(/tan\(/g, 'Math.tan(')
-        .replace(/log\(/g, 'Math.log(')
-        .replace(/\^/g, '**');
-      const res = eval(expr);
+      const res = safeEvaluate(expression);
       setResult(res.toString());
     } catch {
       setResult('Invalid expression');
